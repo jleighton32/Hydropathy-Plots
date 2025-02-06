@@ -1,0 +1,226 @@
+pip install -U kaleido
+
+### Code loosely based on: http://www.dalkescientific.com/writings/NBN/plotting.html
+### But I think this solution is more succint and readable
+import kaleido
+import numpy as np
+from pylab import *
+import plotly.graph_objects as go
+import plotly.express as px
+from google.colab import files
+from google.colab import drive
+import scipy
+
+drive.mount('/content/gdrive')
+images_dir = '/content/gdrive/MyDrive/Hydrophobicity_Plots' # keep /content/gdrive/MyDrive/ the same
+def runningMeanFast(x, N):
+    return np.convolve(x, np.ones((N,))/N)[(N-1):]
+
+def analyze_sequence_similarity(pearson_coef, sequence_length, alpha=0.002):
+    """
+    Analyze sequence similarity using beta distribution for significance testing.
+
+    Parameters:
+    -----------
+    pearson_coef : float
+        The Pearson correlation coefficient between sequences
+    sequence_length : int
+        Length of the sequences being compared
+    alpha : float
+        Significance level (default 0.002 for P < 0.002)
+
+    Returns:
+    --------
+    dict
+        Contains test statistics and results
+    """
+    # Transform Pearson coefficient to ensure it's between -1 and 1
+    r = min(max(pearson_coef, -0.9999), 0.9999)
+
+    # Calculate parameters for beta distribution
+    # Based on Fisher transformation
+    z = np.arctanh(r)
+    se = 1.0 / np.sqrt(sequence_length - 3)
+
+    # Calculate beta distribution parameters
+    # Using method from Fisher's z-transformation
+    df = sequence_length - 2
+    t_stat = r * np.sqrt((df) / (1 - r**2))
+
+    # Calculate p-value using beta distribution
+    # Convert t-statistic to beta distribution parameters
+    a = df/2
+    b = df/2
+    x = (t_stat + np.sqrt(df)) / (2 * np.sqrt(df))
+    p_value = 2 * min(scipy.stats.beta.cdf(x, a, b), 1 - scipy.stats.beta.cdf(x, a, b))
+
+    # Calculate critical value for given alpha
+    critical_value = scipy.stats.beta.ppf(1 - alpha/2, a, b)
+
+    return {
+        'pearson_coefficient': r,
+        'z_score': z,
+        'standard_error': se,
+        't_statistic': t_stat,
+        'p_value': p_value,
+        'critical_value': critical_value,
+        'is_significant': p_value < alpha,
+        'degrees_of_freedom': df
+    }
+
+def gen_hydro(mm, ce, hs, name, window_size=30):
+  ### This is apparently a reference key of amino acids to hydrophobicity values
+  ### outside of my realm of experitise, someone should check that this is correct
+  kd = { 'A': 1.8,'R':-4.5,'N':-3.5,'D':-3.5,'C': 2.5,
+        'Q':-3.5,'E':-3.5,'G':-0.4,'H':-3.2,'I': 4.5,
+        'L': 3.8,'K':-3.9,'M': 1.9,'F': 2.8,'P':-1.6,
+        'S':-0.8,'T':-0.7,'W':-0.9,'Y':-1.3,'V': 4.2 }
+
+  ### get the length of the query sequence
+  seqlen = len(mm)
+  ### Initialize some stuff
+  k_val_mm = []
+  index_mm = []
+  count = 0
+  ### Use this to calculate the kd value thing from the dictionary above and store in a list
+  for i in mm:
+    if i != "-":
+      k_val_mm.append(kd[i])
+      index_mm.append(count)
+
+    else:
+      index_mm.append("-")
+    count +=1
+
+  ### Initialize some stuff
+  k_val_ce = []
+  index_ce = []
+  count = 0
+  ### Use this to calculate the kd value thing from the dictionary above and store in a list
+  for i in ce:
+    if i != "-":
+      k_val_ce.append(kd[i])
+      index_ce.append(count)
+
+    else:
+      index_ce.append("-")
+    count +=1
+
+  ### Initialize some stuff
+  k_val_hs = []
+  index_hs = []
+  count = 0
+  ### Use this to calculate the kd value thing from the dictionary above and store in a list
+  for i in hs:
+    if i != "-":
+      k_val_hs.append(kd[i])
+      index_hs.append(count)
+
+    else:
+      index_hs.append("-")
+    count +=1
+
+  ### Smooth at the specified window size
+  smooth_kval_mm = runningMeanFast(k_val_mm, window_size)
+  smooth_kval_ce = runningMeanFast(k_val_ce, window_size)
+  smooth_kval_hs = runningMeanFast(k_val_hs, window_size)
+
+
+  out_mm = []
+  out_count = 0
+  out_index_mm = []
+  out_count_mm = 0
+  for i in index_mm:
+      if i == "-":
+        out_mm.append(np.nan)
+      else:
+        out_mm.append(smooth_kval_mm[out_count])
+        out_count +=1
+      out_index_mm.append(out_count_mm)
+      out_count_mm +=1
+
+  out_hs = []
+  out_count = 0
+  out_index_hs = []
+  out_count_hs = 0
+  for i in index_hs:
+      if i == "-":
+        out_hs.append(np.nan)
+      else:
+        out_hs.append(smooth_kval_hs[out_count])
+        out_count +=1
+      out_index_hs.append(out_count_hs)
+      out_count_hs +=1
+
+  out_ce = []
+  out_count = 0
+  out_index_ce = []
+  out_count_ce = 0
+  for i in index_ce:
+      if i == "-":
+        out_ce.append(np.nan)
+      else:
+        out_ce.append(smooth_kval_ce[out_count])
+        out_count +=1
+      out_index_ce.append(out_count_ce)
+      out_count_ce +=1
+
+  pos = 0
+  tot = len(index_ce)
+  cor_ce = []
+  cor_hs = []
+  cor_mm = []
+  while pos < tot:
+    ce_p = ce[pos]
+    hs_p = hs[pos]
+    mm_p = mm[pos]
+    if ce_p != "-" and hs_p != "-" and mm_p != "-":
+      cor_ce.append(kd[ce[pos]])
+      cor_hs.append(kd[hs[pos]])
+      cor_mm.append(kd[mm[pos]])
+    pos +=1
+
+  ce_hs = scipy.stats.pearsonr(cor_ce, cor_hs)
+  ce_mm = scipy.stats.pearsonr(cor_ce, cor_mm)
+  mm_hs = scipy.stats.pearsonr(cor_mm, cor_hs)
+
+
+
+  print("correlation CE vs HS: {}".format(ce_hs))
+  #x = analyze_sequence_similarity(ce_hs[0], tot, alpha=0.002)
+  #for i in x:
+  #  print("\t",i, x[i])
+
+  print("correlation CE vs MM: {}".format(ce_mm))
+  #x = analyze_sequence_similarity(ce_mm[0], tot, alpha=0.002)
+  #for i in x:
+  #  print("\t",i, x[i])
+
+  print("correlation MM vs HS: {}".format(mm_hs))
+  #x = analyze_sequence_similarity(mm_hs[0], tot, alpha=0.002)
+  #for i in x:
+  #  print("\t",i, x[i])
+
+  ### make a plot
+  fig = go.Figure()
+  fig.add_trace(go.Scatter(x=out_index_ce, y=out_ce, mode="lines", name="Caenorhabditis elegans", marker=dict(color='blue')))
+  fig.add_trace(go.Scatter(x=out_index_hs, y=out_hs, mode="lines", name="Homo sapiens", marker=dict(color='red')))
+  fig.add_trace(go.Scatter(x=out_index_mm, y=out_mm, mode="lines", name="Mus musculus", marker=dict(color='green')))
+
+  fig.update_layout(xaxis_title="Residue Number")
+  fig.update_layout(yaxis_title="Hydrophobicity")
+  fig.update_layout(template='simple_white')
+  #fig.axis(xmin = 1, xmax = seqlen)
+  #fig.xlabel("residue number")
+  #fig.ylabel("hydrophobicity")
+  #fig.title("K&D hydrophobicity for " + name)
+  return(fig)
+
+# Template
+name = ""
+hs = ""
+mm = ""
+ce = ""
+fance = gen_hydro(mm, ce, hs, name, window_size=30)
+fance.write_image(f"{images_dir}/{name}.png")
+fance.show()
